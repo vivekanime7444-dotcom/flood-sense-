@@ -3,10 +3,10 @@ import random
 
 # Configuration for our mock station
 MOCK_STATION = {
-    "station_id": "GRB-062",
-    "station_name": "Godavari at Nashik",
+    "station_id": "KND-001",
+    "station_name": "Godavari at Kakinada",
     "river_name": "Godavari",
-    "location": "Nashik, Maharashtra",
+    "location": "Kakinada, Andhra Pradesh",
     "basin": "Godavari Basin",
     "normal_water_level": 2.8,
     "danger_water_level": 4.5,

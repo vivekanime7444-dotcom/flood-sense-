@@ -3,25 +3,45 @@ from flask_cors import CORS
 from datetime import datetime, timedelta
 import random
 from flask import render_template
+import urllib.request
+import json
 
+OWM_API_KEY = "203af3d17f3375c49d3e5bcb8be1c19a"  # <--- PASTE YOUR API KEY HERE
 
 # Initialize Flask app
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
-# Configuration for our mock station
-MOCK_STATION = {
-    "station_id": "GRB-062",
-    "station_name": "Godavari at Nashik",
-    "river_name": "Godavari",
-    "location": "Nashik, Maharashtra",
-    "basin": "Godavari Basin",
-    "normal_water_level": 2.8,
-    "danger_water_level": 4.5,
-    "max_water_level": 7.2,
-    "normal_rainfall": 40,
-    "danger_rainfall": 100
+# Configuration for our mock stations
+STATIONS = {
+    "nashik": {
+        "station_id": "GRB-062",
+        "station_name": "Godavari at Nashik",
+        "river_name": "Godavari",
+        "location": "Nashik, Maharashtra",
+        "basin": "Godavari Basin",
+        "normal_water_level": 2.8,
+        "danger_water_level": 4.5,
+        "max_water_level": 7.2,
+        "normal_rainfall": 40,
+        "danger_rainfall": 100,
+        "coords": [19.9975, 73.7898]
+    },
+    "kakinada": {
+        "station_id": "KND-001",
+        "station_name": "Godavari at Kakinada",
+        "river_name": "Godavari",
+        "location": "Kakinada, Andhra Pradesh",
+        "basin": "Godavari Basin",
+        "normal_water_level": 2.8,
+        "danger_water_level": 4.5,
+        "max_water_level": 7.2,
+        "normal_rainfall": 40,
+        "danger_rainfall": 100,
+        "coords": [16.9891, 82.2475]
+    }
 }
+current_station_key = "kakinada"
 
 # Global variable to store current readings
 current_reading = {
@@ -42,17 +62,75 @@ def calculate_risk(water_level, rainfall):
     else:
         return "NORMAL"
 
+def get_real_weather(lat, lon):
+    if OWM_API_KEY == "YOUR_API_KEY_HERE":
+        return None
+    try:
+        url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={OWM_API_KEY}&units=metric"
+        req = urllib.request.Request(url, headers={'User-Agent': 'FloodSense/1.0'})
+        with urllib.request.urlopen(req) as response:
+            data = json.loads(response.read().decode())
+            
+            rain = 0.0
+            if 'rain' in data and '1h' in data['rain']:
+                rain = data['rain']['1h'] * 24
+                
+            temp = data.get('main', {}).get('temp', 25.0)
+            wind = data.get('wind', {}).get('speed', 5.0)
+            
+            return {
+                "rainfall": rain,
+                "temperature": temp,
+                "wind_speed": wind
+            }
+    except Exception as e:
+        print(f"Error fetching real weather: {e}")
+    return None
+
 def get_mock_data():
     """Get current mock data with gradual changes"""
-    global current_reading
+    global current_reading, current_station_key
+    station_data = STATIONS[current_station_key]
     
-    # Update readings with small changes (simulate real sensors)
-    current_reading["water_level"] += random.uniform(-0.1, 0.2)
-    current_reading["rainfall"] += random.uniform(-2, 5)
+    # Try to get REAL weather data
+    real_weather = None
+    if "coords" in station_data:
+        lat, lon = station_data["coords"]
+        real_weather = get_real_weather(lat, lon)
+        
+    if real_weather is not None:
+        current_reading["rainfall"] = real_weather["rainfall"]
+        current_reading["temperature"] = real_weather["temperature"]
+        current_reading["wind_speed"] = real_weather["wind_speed"]
+        
+        # Link water level to real rainfall: 
+        # If it's raining heavily, increase water level, else decrease to normal
+        if real_weather["rainfall"] > 50:
+            current_reading["water_level"] += random.uniform(0.01, 0.03)
+        elif current_reading["water_level"] > station_data.get("normal_water_level", 2.8):
+            current_reading["water_level"] -= random.uniform(0.01, 0.02)
+        else:
+            # Introduce minor natural jitter so the chart is always active
+            current_reading["water_level"] += random.uniform(-0.01, 0.01)
+            
+            # Keep it near the normal level, not dropping too low
+            normal = station_data.get("normal_water_level", 2.8)
+            if current_reading["water_level"] < normal - 0.1:
+                current_reading["water_level"] += 0.02
+    else:
+        # Fallback to pure mock logic if no API key or error
+        current_reading["rainfall"] += random.uniform(-0.5, 1.0)
+        current_reading["water_level"] += random.uniform(-0.02, 0.03)
+        current_reading.setdefault("temperature", 25.0)
+        current_reading.setdefault("wind_speed", 5.0)
+        current_reading["temperature"] += random.uniform(-0.1, 0.1)
+        current_reading["wind_speed"] += random.uniform(-0.1, 0.1)
     
     # Ensure values stay within realistic ranges
     current_reading["water_level"] = max(1.0, min(7.0, round(current_reading["water_level"], 2)))
     current_reading["rainfall"] = max(0, min(200, round(current_reading["rainfall"], 1)))
+    current_reading["temperature"] = round(current_reading["temperature"], 1)
+    current_reading["wind_speed"] = round(current_reading["wind_speed"], 1)
     
     # Update timestamp and risk level
     current_reading["timestamp"] = datetime.now().isoformat()
@@ -61,7 +139,7 @@ def get_mock_data():
         current_reading["rainfall"]
     )
     
-    return {**MOCK_STATION, **current_reading}
+    return {**station_data, **current_reading}
 
 def simulate_emergency():
     """Force dangerous levels for demo purposes"""
@@ -88,17 +166,51 @@ def reset_to_normal():
 # API Routes
 @app.route('/api/health', methods=['GET'])
 def health_check():
+    station = STATIONS[current_station_key]
     return jsonify({
         "status": "OK", 
         "message": "FloodSense API is running",
-        "station_monitored": MOCK_STATION["station_id"],
-        "station_name": MOCK_STATION["station_name"],
+        "station_monitored": station["station_id"],
+        "station_name": station["station_name"],
         "data_source": "Mock CWC/IMD Data (Stable Demo Version)"
     })
 
 @app.route('/')
 def dashboard():
     return render_template('index.html')
+
+@app.route('/api/set-station', methods=['POST'])
+def set_station():
+    global current_station_key
+    data = request.json
+    
+    query = data.get('query')
+    coords = data.get('coords')
+    
+    if query and coords:
+        key = query.lower().replace(" ", "_")
+        if key not in STATIONS:
+            STATIONS[key] = {
+                "station_id": f"DYN-{random.randint(100, 999)}",
+                "station_name": query,
+                "river_name": "Local River",
+                "location": query,
+                "basin": "Unknown Basin",
+                "normal_water_level": 2.8,
+                "danger_water_level": 4.5,
+                "max_water_level": 7.2,
+                "normal_rainfall": 40,
+                "danger_rainfall": 100,
+                "coords": coords
+            }
+        current_station_key = key
+        return jsonify({"status": "success", "message": f"Station set to {query}"})
+
+    station_key = data.get('station_key')
+    if station_key and station_key in STATIONS:
+        current_station_key = station_key
+        return jsonify({"status": "success", "message": f"Station set to {STATIONS[station_key]['station_name']}"})
+    return jsonify({"status": "error", "message": "Invalid station key"}), 400
 
 
 @app.route('/api/station-data', methods=['GET'])
@@ -252,7 +364,8 @@ def get_station_info():
 if __name__ == '__main__':
     print("🚀 Starting FloodSense Mock API Server")
     print("✅ Using stable mock data - No API dependencies")
-    print(f"📡 Monitoring: {MOCK_STATION['station_name']}")
+    station = STATIONS[current_station_key]
+    print(f"📡 Monitoring: {station['station_name']}")
     print("\n📋 API Endpoints:")
     print("   GET  /api/health            - Health check")
     print("   GET  /api/station-data      - Get mock CWC data")
